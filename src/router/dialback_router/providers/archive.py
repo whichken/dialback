@@ -74,6 +74,13 @@ class Archive(Provider):
 
         ident = f"{timestamp}|{capture_url}"
         cached = self.cache.get("content", ident)
+        if cached is not None:
+            ctype_str, _, body = cached.partition(b"\n")
+            ctype_str = ctype_str.decode(errors="replace")
+            body = self.transform(req, ctype_str, body)
+            await self._serve(req, 200, ctype_str, body,
+                              head_only=(req.method == "HEAD"))
+            return
         if cached is None:
             fetch_url = (
                 f"https://web.archive.org/web/{timestamp}id_/{capture_url}"
@@ -98,9 +105,15 @@ class Archive(Provider):
             cached = (ctype or "").encode() + b"\n" + body
             self.cache.put("content", ident, cached)
 
-        ctype, _, body = cached.partition(b"\n")
-        await self._serve(req, 200, ctype.decode(errors="replace"), body,
-                        head_only=(req.method == "HEAD"))
+        ctype_str, _, raw_body = cached.partition(b"\n")
+        ctype_str = ctype_str.decode(errors="replace")
+        body = self.transform(req, ctype_str, raw_body)
+        await self._serve(req, 200, ctype_str, body,
+                          head_only=(req.method == "HEAD"))
+
+    def transform(self, req: Request, ctype: str, body: bytes) -> bytes:
+        """Hook for subclasses (hybrid) to post-process served content."""
+        return body
 
     # ---------------------------------------------------------------- CDX --
 

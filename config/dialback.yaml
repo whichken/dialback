@@ -32,8 +32,55 @@ providers:
     max_tokens: 4000
     daily_request_cap: 300      # 0 = unlimited; counter resets daily/restart
     cache_root: /var/cache/dialback
+  search:
+    model: gpt-5.6-luna
+    cache_root: /var/cache/dialback
+  hybrid:
+    # inherits archive's settings via subclassing; keep cache aligned
+    cache_root: /var/cache/dialback
+    fallback_provider: llm
 
 rules:
+  # Era search engines (stage 7) - real queries, synthesized-but-real links
+  - match:
+      host: "*.altavista.digital.com"
+    provider: search
+  - match:
+      host: "altavista.digital.com"
+    provider: search
+  - match:
+      host: "*.altavista.com"
+    provider: search
+  - match:
+      host: "altavista.com"
+    provider: search
+  - match:
+      host: "*.hotbot.com"
+    provider: search
+  - match:
+      host: "hotbot.com"
+    provider: search
+  - match:
+      host: "*.lycos.com"
+    provider: search
+  - match:
+      host: "lycos.com"
+    provider: search
+  - match:
+      host: "search.yahoo.com"
+    provider: search
+
+  # Hybrid: archived content dressed with era chrome
+  - match:
+      host: "*.geocities.com"
+    provider: hybrid
+  - match:
+      host: "*.angelfire.com"
+    provider: hybrid
+  - match:
+      host: "*.tripod.com"
+    provider: hybrid
+
   # Test hooks: *.dialback.test shows the placeholder page (proves routing)
   - match:
       host: "*.dialback.test"
