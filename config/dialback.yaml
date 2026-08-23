@@ -1,0 +1,18 @@
+# Dialback router main configuration.
+# Deployed to /etc/dialback/dialback.yaml
+
+listen_host: 0.0.0.0
+listen_port: 8888
+
+# Global era setting (stage 3 turns this into full era profiles)
+era: "1997"
+
+# Fallback for requests that match no rule: keep the retro PC on the real
+# internet until archive/LLM providers take over.
+default_provider: passthrough
+
+rules:
+  # Test hooks: any *.dialback.test host shows the placeholder page
+  - match:
+      host: "*.dialback.test"
+    provider: placeholder

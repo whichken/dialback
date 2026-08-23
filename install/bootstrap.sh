@@ -30,7 +30,7 @@ log() { echo "[dialback] $*"; }
 
 log "installing packages..."
 sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dnsmasq nftables >/dev/null
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dnsmasq nftables python3-yaml >/dev/null
 
 log "copying rootfs overlays..."
 sudo install -D -m 644 "$OVERLAYS/etc/sysctl.d/90-dialback.conf"     /etc/sysctl.d/90-dialback.conf
@@ -61,10 +61,33 @@ log "restarting dnsmasq (DHCP+DNS on eth0)..."
 sudo systemctl restart dnsmasq
 sudo systemctl enable dnsmasq >/dev/null 2>&1
 
+# ---------------------------------------------------------------- router ----
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+ROUTER_SRC="$REPO_ROOT/src/router"
+if [[ -d "$ROUTER_SRC/dialback_router" ]]; then
+    log "installing dialback router service..."
+    sudo mkdir -p /opt/dialback /etc/dialback
+    sudo rsync -a --delete "$ROUTER_SRC/" /opt/dialback/src/router/
+    sudo cp "$REPO_ROOT/config/dialback.yaml" /etc/dialback/dialback.yaml
+    sudo install -m 644 \
+        "$OVERLAYS/etc/systemd/system/dialback-router.service" \
+        /etc/systemd/system/dialback-router.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now dialback-router >/dev/null 2>&1 || true
+    sudo systemctl restart dialback-router
+else
+    log "NOTE: $ROUTER_SRC not found - skipping router service install"
+fi
+
 log "verifying..."
 systemctl is-active --quiet nftables  || { echo "nftables not active" >&2; exit 1; }
 systemctl is-active --quiet dnsmasq   || { echo "dnsmasq not active" >&2; exit 1; }
+if systemctl list-unit-files dialback-router.service >/dev/null 2>&1; then
+    systemctl is-active --quiet dialback-router \
+        || { echo "dialback-router not active" >&2; exit 1; }
+fi
 
 log "gateway bootstrap complete."
-log "  upstream : wlan0 (NAT masquerade)"
+log "  upstream  : wlan0 (NAT masquerade)"
 log "  downstream: $GATEWAY_CIDR on eth0 (DHCP 10.0.0.100-150, DNS served locally)"
+log "  interception: tcp/80 from eth0 -> router on :8888"

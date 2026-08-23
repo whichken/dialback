@@ -1,0 +1,58 @@
+"""Rule engine: matches hosts to providers, resolves the active era.
+
+Stage 2 scope: a flat rule list with wildcard host matching and a default
+provider. The era is a single global label from config; per-domain era
+pinning arrives with the era engine (stage 3+).
+"""
+from __future__ import annotations
+
+import fnmatch
+from dataclasses import dataclass, field
+
+from . import providers
+
+
+@dataclass
+class Rule:
+    provider: str
+    host: str | None = None       # wildcard pattern, e.g. "*.geocities.com"
+
+
+@dataclass
+class RuleEngine:
+    era: str
+    default_provider: str
+    rules: list[Rule] = field(default_factory=list)
+    _instances: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_config(cls, config: dict) -> "RuleEngine":
+        rules = [
+            Rule(provider=r["provider"], host=(r.get("match") or {}).get("host"))
+            for r in config.get("rules", [])
+        ]
+        return cls(
+            era=str(config.get("era", "1997")),
+            default_provider=config.get("default_provider", "passthrough"),
+            rules=rules,
+        )
+
+    def select(self, host: str | None) -> tuple[str, "providers.Provider"]:
+        """Returns (provider_name, provider_instance) for a request host."""
+        name = self.default_provider
+        if host:
+            for rule in self.rules:
+                if rule.host and fnmatch.fnmatch(host.lower(), rule.host.lower()):
+                    name = rule.provider
+                    break
+
+        inst = self._instances.get(name)
+        if inst is None:
+            options = self._provider_options(name)
+            inst = providers.create(name, options)
+            self._instances[name] = inst
+        return name, inst
+
+    def _provider_options(self, name: str) -> dict:
+        # wired up when a provider actually needs config; kept simple for now
+        return {}

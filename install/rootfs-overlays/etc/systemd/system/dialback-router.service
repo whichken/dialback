@@ -1,0 +1,14 @@
+[Unit]
+Description=Dialback router (transparent HTTP interception)
+After=network.target dnsmasq.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dialback/src/router
+ExecStart=/usr/bin/python3 -m dialback_router /etc/dialback/dialback.yaml
+Restart=always
+RestartSec=3
+# Dev appliance: run as root so later stages can manage nftables/dnsmasq too.
+
+[Install]
+WantedBy=multi-user.target
