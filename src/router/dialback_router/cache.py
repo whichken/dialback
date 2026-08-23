@@ -71,6 +71,18 @@ class DiskCache:
             "budget": self._compute_budget(sum(s for _, s, _ in entries)),
         }
 
+    def purge(self) -> int:
+        """Delete everything. Returns bytes freed."""
+        entries = self._scan()
+        total = sum(s for _, s, _ in entries)
+        for _mtime, _size, path in entries:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._prune_empty_dirs()
+        return total
+
     def enforce(self) -> int:
         """Evict LRU entries until within budget. Returns bytes freed."""
         self._writes = 0

@@ -4,6 +4,12 @@
 listen_host: 0.0.0.0
 listen_port: 8888
 
+# Control plane UI (stage 6): reachable as admin.dialback from the retro PC,
+# and from your modern LAN at http://<pi-ip>:8899
+admin:
+  hostname: admin.dialback
+  listen_port: 8899
+
 # Active era: name of a YAML profile in era_dir
 era: "1997"
 era_dir: /opt/dialback/eras

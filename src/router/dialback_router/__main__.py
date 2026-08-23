@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import logging
 import sys
 
 import yaml
 
+from .admin import AdminApp
 from .rules import RuleEngine
 from .server import RouterServer
 
@@ -29,12 +31,27 @@ def main() -> int:
 
     bind = args.bind or config.get("listen_host", "0.0.0.0")
     port = args.port or int(config.get("listen_port", 8888))
+    admin_cfg = config.get("admin") or {}
+    admin_port = admin_cfg.get("listen_port")
 
     engine = RuleEngine.from_config(config)
-    server = RouterServer(engine)
+
+    # persisted era choice (set via the control UI) wins over config file
+    saved = AdminApp.load_state()
+    if saved.get("era") and saved["era"] != engine.era and engine.era_dir:
+        try:
+            engine.switch_era(saved["era"])
+            logging.info("restored persisted era %s from state file", saved["era"])
+        except FileNotFoundError:
+            logging.warning("persisted era %s not found; keeping %s",
+                            saved["era"], engine.era)
+
+    request_log = collections.deque(maxlen=200)
+    admin_app = AdminApp(engine, request_log, admin_cfg)
+    server = RouterServer(engine, request_log, admin_app)
 
     try:
-        asyncio.run(server.serve(bind, port))
+        asyncio.run(server.serve(bind, port, admin_port))
     except KeyboardInterrupt:
         print("\nshutting down", file=sys.stderr)
     return 0

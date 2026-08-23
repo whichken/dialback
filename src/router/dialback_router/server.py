@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import collections
+import datetime
 import logging
 import socket
 import struct
@@ -51,10 +53,22 @@ def _parse_head(raw_head: bytes) -> tuple[str, str, str | None]:
 
 
 class RouterServer:
-    def __init__(self, engine: RuleEngine):
+    def __init__(self, engine: RuleEngine,
+                 request_log: collections.deque | None = None,
+                 admin=None):
         self.engine = engine
+        self.request_log = request_log or collections.deque(maxlen=200)
+        self.admin = admin  # AdminApp instance or None
 
-    async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    # ------------------------------------------------------------- intake --
+
+    async def handle_intercepted(self, reader, writer):
+        await self._handle(reader, writer, via_admin_listener=False)
+
+    async def handle_admin_listener(self, reader, writer):
+        await self._handle(reader, writer, via_admin_listener=True)
+
+    async def _handle(self, reader, writer, via_admin_listener: bool):
         peer = writer.get_extra_info("peername")
         peer_ip = peer[0] if peer else "?"
         orig_dst = _original_dst(writer)
@@ -67,18 +81,30 @@ class RouterServer:
             return
 
         method, path, host = _parse_head(raw_head)
-        req = Request(
-            method=method,
-            path=path,
-            host=host,
-            raw_head=raw_head,
-            orig_dst=orig_dst,
-            era=self.engine.era,
-            profile=self.engine.profile,
-            reader=reader,
-            writer=writer,
-        )
 
+        # --- control plane routing ---
+        is_admin = (self.admin is not None and via_admin_listener) or (
+            self.admin is not None and host == self.admin.hostname
+        )
+        if is_admin:
+            req = self._make_request(method, path, host, raw_head,
+                                     orig_dst, reader, writer)
+            started = datetime.datetime.now()
+            try:
+                await self.admin.handle(req)
+            except (ConnectionError, BrokenPipeError):
+                pass
+            except Exception:
+                log.exception("admin handler crashed")
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+            self._record(peer_ip, "admin", method, host or "", path)
+            return
+
+        req = self._make_request(method, path, host, raw_head,
+                                 orig_dst, reader, writer)
         provider_name, provider = self.engine.select(host)
         log.info("%s -> %s %s http://%s%s [era=%s]",
                  peer_ip, provider_name, method, host or "?", path, req.era)
@@ -93,11 +119,50 @@ class RouterServer:
                 writer.close()
             except Exception:
                 pass
+        self._record(peer_ip, provider_name, method, host or "", path)
 
-    async def serve(self, bind_host: str, bind_port: int) -> None:
-        server = await asyncio.start_server(self.handle, bind_host, bind_port)
+    def _make_request(self, method, path, host, raw_head, orig_dst,
+                      reader, writer) -> Request:
+        return Request(
+            method=method,
+            path=path,
+            host=host,
+            raw_head=raw_head,
+            orig_dst=orig_dst,
+            era=self.engine.era,
+            profile=self.engine.profile,
+            reader=reader,
+            writer=writer,
+        )
+
+    def _record(self, client, provider, method, host, path) -> None:
+        self.request_log.append({
+            "time": datetime.datetime.now().strftime("%H:%M:%S"),
+            "client": client,
+            "provider": provider,
+            "method": method,
+            "host": host,
+            "path": path,
+            "era": self.engine.era,
+        })
+
+    # -------------------------------------------------------------- serve --
+
+    async def serve(self, bind_host: str, bind_port: int,
+                    admin_port: int | None = None) -> None:
+        server = await asyncio.start_server(
+            self.handle_intercepted, bind_host, bind_port)
         addrs = ", ".join(str(s.getsockname()) for s in server.sockets or [])
+        servers = [server]
+        if admin_port:
+            asrv = await asyncio.start_server(
+                self.handle_admin_listener, bind_host, admin_port)
+            aaddrs = ", ".join(str(s.getsockname()) for s in asrv.sockets or [])
+            log.info("admin UI on %s (hostname %s)", aaddrs,
+                     getattr(self.admin, "hostname", "?"))
+            servers.append(asrv)
         log.info("dialback router listening on %s (era=%s, default=%s)",
                  addrs, self.engine.era, self.engine.default_provider)
-        async with server:
-            await server.serve_forever()
+        async with asyncio.TaskGroup() as tg:
+            for s in servers:
+                tg.create_task(s.serve_forever())

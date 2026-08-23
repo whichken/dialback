@@ -18,6 +18,7 @@ class RuleEngine:
     era: str
     default_provider: str
     profile: EraProfile | None = None
+    era_dir: str | None = None
     rules: list[Rule] = field(default_factory=list)
     _instances: dict = field(default_factory=dict)
 
@@ -34,6 +35,8 @@ class RuleEngine:
         )
         engine._provider_config = config.get("providers", {})
         providers.set_provider_config(engine._provider_config)
+        engine.era_dir = config.get("era_dir")
+        providers.set_provider_config(engine._provider_config)
         era_dir = config.get("era_dir")
         if era_dir:
             try:
@@ -41,6 +44,13 @@ class RuleEngine:
             except FileNotFoundError:
                 pass
         return engine
+
+    def switch_era(self, name: str) -> None:
+        """Runtime era change; providers are stateless w.r.t. era so this is safe."""
+        if not self.era_dir:
+            raise ValueError("no era_dir configured")
+        self.profile = EraProfile.load(self.era_dir, name)
+        self.era = name
 
     def select(self, host: str | None) -> tuple[str, "providers.Provider"]:
         """Returns (provider_name, provider_instance) for a request host."""
