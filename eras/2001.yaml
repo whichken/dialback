@@ -1,0 +1,19 @@
+# Era profile: 2001
+name: "2001"
+start_date: "2001-01-01"
+end_date: "2001-12-31"
+
+protocols: [http, https-rare]
+
+page_style:
+  max_width: 800
+  colors: web-safe-fading-out
+  features:
+    - tables
+    - css-basic
+    - guestbook
+    - phpbb-forums
+    - splash-pages
+
+search_engines: [google, altavista, yahoo]
+dominant_browsers: [ie5, ie5.5, netscape-6]

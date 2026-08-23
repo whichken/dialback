@@ -15,8 +15,9 @@ class Request:
     raw_head: bytes           # exact bytes the client sent (up to blank line)
     orig_dst: tuple[str, int] | None  # pre-redirect destination (ip, port)
     era: str                  # resolved era label, e.g. "1997"
-    reader: asyncio.StreamReader
-    writer: asyncio.StreamWriter
+    profile: object | None = None     # EraProfile instance for this request
+    reader: asyncio.StreamReader = None  # type: ignore[assignment]
+    writer: asyncio.StreamWriter = None  # type: ignore[assignment]
 
     @property
     def client_ip(self) -> str | None:

@@ -4,18 +4,28 @@
 listen_host: 0.0.0.0
 listen_port: 8888
 
-# Global era setting (stage 3 turns this into full era profiles)
+# Active era: name of a YAML profile in era_dir
 era: "1997"
+era_dir: /opt/dialback/eras
 
-# Fallback for requests that match no rule: keep the retro PC on the real
-# internet until archive/LLM providers take over.
-default_provider: passthrough
+# Stage 3: the archive is now the default experience - unknown hosts get
+# their era-appropriate archived pages (or a "not in the archive" page).
+default_provider: archive
+
+providers:
+  archive:
+    cache_root: /var/cache/dialback
 
 rules:
-  # Test hooks: dialback.test and any subdomain show the placeholder page
+  # Test hooks: *.dialback.test shows the placeholder page (proves routing)
   - match:
       host: "*.dialback.test"
     provider: placeholder
   - match:
       host: "dialback.test"
     provider: placeholder
+
+  # Escape hatch: hosts you always want served live from today's internet
+  - match:
+      host: "*.windowsupdate.com"
+    provider: passthrough

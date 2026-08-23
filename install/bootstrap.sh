@@ -68,6 +68,7 @@ if [[ -d "$ROUTER_SRC/dialback_router" ]]; then
     log "installing dialback router service..."
     sudo mkdir -p /opt/dialback /etc/dialback
     sudo rsync -a --delete "$ROUTER_SRC/" /opt/dialback/src/router/
+    sudo rsync -a --delete "$REPO_ROOT/eras/" /opt/dialback/eras/
     sudo cp "$REPO_ROOT/config/dialback.yaml" /etc/dialback/dialback.yaml
     sudo install -m 644 \
         "$OVERLAYS/etc/systemd/system/dialback-router.service" \

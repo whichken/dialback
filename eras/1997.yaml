@@ -1,0 +1,21 @@
+# Era profile: 1997
+# The web of dial-up modems, Geocities, and table layouts.
+name: "1997"
+start_date: "1997-01-01"
+end_date: "1997-12-31"
+
+protocols: [http]
+
+page_style:
+  max_width: 640
+  colors: websafe
+  features:
+    - tables
+    - frames
+    - guestbook
+    - hit-counter
+    - under-construction-gifs
+    - webrings
+
+search_engines: [altavista, yahoo-directory, hotbot]
+dominant_browsers: [netscape-navigator-4, ie3, ie4]

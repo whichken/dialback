@@ -1,15 +1,11 @@
-"""Rule engine: matches hosts to providers, resolves the active era.
-
-Stage 2 scope: a flat rule list with wildcard host matching and a default
-provider. The era is a single global label from config; per-domain era
-pinning arrives with the era engine (stage 3+).
-"""
+"""Rule engine: matches hosts to providers, resolves the active era."""
 from __future__ import annotations
 
 import fnmatch
 from dataclasses import dataclass, field
 
 from . import providers
+from .era import EraProfile
 
 
 @dataclass
@@ -22,6 +18,7 @@ class Rule:
 class RuleEngine:
     era: str
     default_provider: str
+    profile: EraProfile | None = None
     rules: list[Rule] = field(default_factory=list)
     _instances: dict = field(default_factory=dict)
 
@@ -31,11 +28,19 @@ class RuleEngine:
             Rule(provider=r["provider"], host=(r.get("match") or {}).get("host"))
             for r in config.get("rules", [])
         ]
-        return cls(
+        engine = cls(
             era=str(config.get("era", "1997")),
             default_provider=config.get("default_provider", "passthrough"),
             rules=rules,
         )
+        engine._provider_config = config.get("providers", {})
+        era_dir = config.get("era_dir")
+        if era_dir:
+            try:
+                engine.profile = EraProfile.load(era_dir, engine.era)
+            except FileNotFoundError:
+                pass
+        return engine
 
     def select(self, host: str | None) -> tuple[str, "providers.Provider"]:
         """Returns (provider_name, provider_instance) for a request host."""
@@ -54,5 +59,4 @@ class RuleEngine:
         return name, inst
 
     def _provider_options(self, name: str) -> dict:
-        # wired up when a provider actually needs config; kept simple for now
-        return {}
+        return getattr(self, "_provider_config", {}).get(name, {})

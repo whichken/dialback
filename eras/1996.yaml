@@ -1,0 +1,19 @@
+# Era profile: 1996
+name: "1996"
+start_date: "1996-01-01"
+end_date: "1996-12-31"
+
+protocols: [http]
+
+page_style:
+  max_width: 600
+  colors: websafe
+  features:
+    - tables
+    - frames
+    - guestbook
+    - under-construction-gifs
+    - animated-gifs
+
+search_engines: [altavista, yahoo-directory, lycos]
+dominant_browsers: [netscape-navigator-3, ie3]

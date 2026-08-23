@@ -74,6 +74,7 @@ class RouterServer:
             raw_head=raw_head,
             orig_dst=orig_dst,
             era=self.engine.era,
+            profile=self.engine.profile,
             reader=reader,
             writer=writer,
         )

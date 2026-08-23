@@ -20,6 +20,7 @@ rsync -a --delete --exclude '.git' --exclude '__pycache__' \
     "$REPO_ROOT/src/"     "$PI:/opt/dialback/src/"
 rsync -a --delete "$REPO_ROOT/config/"  "$PI:/opt/dialback/config/"
 rsync -a --delete "$REPO_ROOT/install/" "$PI:/opt/dialback/install/"
+rsync -a --delete "$REPO_ROOT/eras/"    "$PI:/opt/dialback/eras/"
 
 echo "[deploy] installing config + service + firewall rules ..."
 ssh "$PI" 'set -e
@@ -30,7 +31,8 @@ sudo cp /opt/dialback/install/rootfs-overlays/etc/systemd/system/dialback-router
 sudo cp /opt/dialback/install/rootfs-overlays/etc/nftables.conf /etc/nftables.conf
 sudo cp /opt/dialback/install/rootfs-overlays/etc/dnsmasq.d/dialback.conf /etc/dnsmasq.d/
 sudo systemctl daemon-reload
-sudo nft -f /etc/nftables.conf'
+sudo nft -f /etc/nftables.conf
+sudo systemctl restart dnsmasq'
 
 if [[ "$NO_RESTART" == "true" ]]; then
     echo "[deploy] skipping service restart"
