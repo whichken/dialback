@@ -54,11 +54,11 @@ def _parse_head(raw_head: bytes) -> tuple[str, str, str | None]:
 
 class RouterServer:
     def __init__(self, engine: RuleEngine,
-                 request_log: collections.deque | None = None,
+                 traffic=None,
                  admin=None):
         self.engine = engine
-        self.request_log = request_log or collections.deque(maxlen=200)
-        self.admin = admin  # AdminApp instance or None
+        self.traffic = traffic  # TrafficLog instance
+        self.admin = admin      # AdminApp instance or None
 
     # ------------------------------------------------------------- intake --
 
@@ -89,7 +89,6 @@ class RouterServer:
         if is_admin:
             req = self._make_request(method, path, host, raw_head,
                                      orig_dst, reader, writer)
-            started = datetime.datetime.now()
             try:
                 await self.admin.handle(req)
             except (ConnectionError, BrokenPipeError):
@@ -100,7 +99,9 @@ class RouterServer:
                     writer.close()
                 except Exception:
                     pass
-            self._record(peer_ip, "admin", method, host or "", path)
+            if self.traffic:
+                self.traffic.record(peer_ip, "admin", method, host or "", path,
+                                    self.engine.era)
             return
 
         req = self._make_request(method, path, host, raw_head,
@@ -119,7 +120,9 @@ class RouterServer:
                 writer.close()
             except Exception:
                 pass
-        self._record(peer_ip, provider_name, method, host or "", path)
+        if self.traffic:
+            self.traffic.record(peer_ip, provider_name, method, host or "",
+                                path, self.engine.era)
 
     def _make_request(self, method, path, host, raw_head, orig_dst,
                       reader, writer) -> Request:
@@ -136,15 +139,10 @@ class RouterServer:
         )
 
     def _record(self, client, provider, method, host, path) -> None:
-        self.request_log.append({
-            "time": datetime.datetime.now().strftime("%H:%M:%S"),
-            "client": client,
-            "provider": provider,
-            "method": method,
-            "host": host,
-            "path": path,
-            "era": self.engine.era,
-        })
+        """Kept for compatibility; prefer self.traffic.record()."""
+        if self.traffic:
+            self.traffic.record(client, provider, method, host, path,
+                                self.engine.era)
 
     # -------------------------------------------------------------- serve --
 

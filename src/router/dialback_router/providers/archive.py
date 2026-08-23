@@ -130,7 +130,7 @@ class Archive(Provider):
         if not captures:
             return None
 
-        target = (prof.start + prof.end) // 2
+        target = prof.target
         ts, orig = min(captures, key=lambda c: abs(c[0] - target))
         # normalize truncated timestamps (CDX may return e.g. 1997 only)
         return f"{ts:014d}", orig

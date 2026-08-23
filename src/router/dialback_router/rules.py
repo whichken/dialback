@@ -5,7 +5,7 @@ import fnmatch
 from dataclasses import dataclass, field
 
 from . import providers
-from .era import EraProfile
+from .era import EraProfile, valid_date
 
 
 @dataclass
@@ -51,6 +51,13 @@ class RuleEngine:
             raise ValueError("no era_dir configured")
         self.profile = EraProfile.load(self.era_dir, name)
         self.era = name
+
+    def set_date(self, date_iso: str) -> None:
+        """Dial to an arbitrary date (YYYY-MM-DD)."""
+        if not valid_date(date_iso):
+            raise ValueError(f"date out of range: {date_iso}")
+        self.profile = EraProfile.for_date(date_iso)
+        self.era = self.profile.name
 
     def select(self, host: str | None) -> tuple[str, "providers.Provider"]:
         """Returns (provider_name, provider_instance) for a request host."""

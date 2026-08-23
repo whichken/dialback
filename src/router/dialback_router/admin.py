@@ -1,4 +1,4 @@
-"""Admin/control-plane UI: era dialing, status, request log, cache tools.
+"""Admin/control-plane UI: date dialing, status, per-domain log, cache tools.
 
 Reachable through the interception layer via the admin hostname, and/or on
 a dedicated LAN-facing port. Deliberately simple HTML (renders fine on
@@ -6,19 +6,21 @@ period browsers too).
 """
 from __future__ import annotations
 
-import collections
 import datetime
 import glob
 import html
 import os
-import pathlib
 import urllib.parse
 
 import yaml
 
+from .era import FLOOR_DATE, valid_date
 from .request import Request
 
 STATE_FILE = "/var/lib/dialback/state.yaml"
+
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 PAGE_SHELL = """<!DOCTYPE HTML>
 <html><head><meta charset="utf-8"><title>Dialback Control</title>
@@ -27,17 +29,20 @@ PAGE_SHELL = """<!DOCTYPE HTML>
  .wrap {{ max-width: 900px; margin: 0 auto; padding: 20px; }}
  h1 {{ font-weight: normal; letter-spacing: 2px; }} h1 b {{ color: #e94560; }}
  h2 {{ border-bottom: 1px solid #444; padding-bottom: 4px; font-weight: normal;
-      color: #a0a0c0; font-size: 15px; text-transform: uppercase; letter-spacing: 1px; }}
+      color: #a0a0c0; font-size: 15px; text-transform: uppercase; letter-spacing: 1px;
+      margin-top: 28px; }}
  table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
  td, th {{ padding: 5px 8px; border-bottom: 1px solid #333; text-align: left; }}
  th {{ color: #8888aa; font-weight: normal; }}
  .big {{ font-size: 42px; color: #e94560; }}
  .muted {{ color: #777799; }}
- input[type=radio] {{ margin-right: 6px; }}
+ select {{ background: #2a2a44; color: #eaeaea; border: 1px solid #555;
+          padding: 4px 6px; font-size: 15px; }}
  button {{ background: #e94560; color: white; border: 0; padding: 8px 22px;
           font-size: 15px; cursor: pointer; }}
  button.minor {{ background: #444466; padding: 4px 12px; font-size: 13px; }}
  .flash {{ background: #2a4d3a; padding: 8px 12px; margin: 10px 0; }}
+ label {{ display: block; margin: 3px 0; }}
 </style></head>
 <body><div class="wrap">
 <h1><b>DIAL</b>BACK <span class="muted">control</span></h1>
@@ -45,19 +50,19 @@ PAGE_SHELL = """<!DOCTYPE HTML>
 </div></body></html>"""
 
 
-def _fmt_bytes(n: int | float) -> str:
+def _fmt_bytes(n) -> str:
+    n = float(n)
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
-            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+            return f"{int(n)} B" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} TB"
 
 
 class AdminApp:
-    def __init__(self, engine, request_log: collections.deque,
-                 admin_cfg: dict | None = None):
+    def __init__(self, engine, traffic, admin_cfg: dict | None = None):
         self.engine = engine
-        self.request_log = request_log
+        self.traffic = traffic          # TrafficLog
         cfg = admin_cfg or {}
         self.hostname = cfg.get("hostname", "admin.dialback")
         self.started_at = datetime.datetime.now()
@@ -65,56 +70,77 @@ class AdminApp:
     # ----------------------------------------------------------- routing --
 
     async def handle(self, req: Request) -> None:
-        path = req.path.rstrip("/") or "/admin"
+        path = req.path.split("?")[0].rstrip("/") or "/admin"
         if req.method == "POST":
-            form_raw = b""
-            if req.reader is not None:
-                length = 0
-                for line in req.raw_head.split(b"\r\n")[1:]:
-                    if line.lower().startswith(b"content-length:"):
-                        length = int(line.split(b":", 1)[1].strip() or 0)
-                if length:
-                    form_raw = await req.reader.readexactly(length)
-            form = urllib.parse.parse_qs(form_raw.decode(errors="replace"))
+            form = await self._read_form(req)
             if path == "/admin/era":
-                await self._post_era(req, form)
-                return
-            if path == "/admin/cache/purge":
-                await self._post_cache_purge(req)
-                return
+                wanted = (form.get("era") or [""])[0]
+                if wanted in self.available_eras():
+                    self.engine.switch_era(wanted)
+                    self._persist_state({"era": wanted})
+                    await self._redirect(req, flash=f"Era set to {wanted}.")
+                else:
+                    await self._redirect(req, flash=f"Unknown era '{wanted}'.")
+            elif path == "/admin/date":
+                iso = self._date_from_form(form)
+                if iso:
+                    self.engine.set_date(iso)
+                    self._persist_state({"date": iso})
+                    await self._redirect(req, flash=f"Time set to {iso}.")
+                else:
+                    await self._redirect(
+                        req, flash="Invalid date (must be between "
+                                   f"{FLOOR_DATE} and today).")
+            elif path == "/admin/cache/purge":
+                cache = self._cache()
+                if cache is not None:
+                    freed = cache.purge()
+                    await self._redirect(req,
+                                         flash=f"Cache purged ({_fmt_bytes(freed)}).")
+                else:
+                    await self._redirect(req, flash="No cache provider found.")
+            else:
+                await self._serve_page(req, "<p>Unknown action.</p>", 404)
+            return
 
         if path == "/admin/api/status":
             import json
             body = json.dumps(self._status()).encode()
-            head = (f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                    f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode()
+            head = ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    f"Content-Length: {len(body)}\r\n"
+                    "Connection: close\r\n\r\n").encode()
             req.writer.write(head + body)
             await req.writer.drain()
             return
 
-        if path in ("/admin", "/admin/log"):
-            await self._serve_dashboard(req)
+        if path == "/admin":
+            flash = urllib.parse.parse_qs(
+                urllib.parse.urlparse(req.path).query).get("flash", [""])[0]
+            await self._serve_dashboard(req, flash=flash)
             return
 
         await self._serve_page(req, "<p>Unknown admin path.</p>", 404)
 
-    async def _post_era(self, req: Request, form: dict) -> None:
-        wanted = (form.get("era") or [""])[0]
-        eras = self.available_eras()
-        if wanted in eras:
-            self.engine.switch_era(wanted)
-            self._persist_state({"era": wanted})
-            await self._redirect(req, flash=f"Era set to {wanted}.")
-        else:
-            await self._redirect(req, flash=f"Unknown era '{html.escape(wanted)}'.")
+    async def _read_form(self, req: Request) -> dict:
+        form_raw = b""
+        length = 0
+        for line in req.raw_head.split(b"\r\n")[1:]:
+            if line.lower().startswith(b"content-length:"):
+                length = int(line.split(b":", 1)[1].strip() or 0)
+        if length and req.reader is not None:
+            form_raw = await req.reader.readexactly(length)
+        return urllib.parse.parse_qs(form_raw.decode(errors="replace"))
 
-    async def _post_cache_purge(self, req: Request, ) -> None:
-        cache = self._cache()
-        freed = None
-        if cache is not None:
-            freed = cache.purge()
-        await self._redirect(req, flash="Cache purged." if freed is not None
-                             else "No cache provider found.")
+    @staticmethod
+    def _date_from_form(form: dict) -> str | None:
+        try:
+            y = int((form.get("year") or [""])[0])
+            m = int((form.get("month") or [""])[0])
+            d = int((form.get("day") or [""])[0])
+            iso = f"{y:04d}-{m:02d}-{d:02d}"
+            return iso if valid_date(iso) else None
+        except ValueError:
+            return None
 
     # ------------------------------------------------------------ helpers --
 
@@ -122,9 +148,8 @@ class AdminApp:
         era_dir = self.engine.era_dir
         if not era_dir:
             return [self.engine.era]
-        return sorted(
-            os.path.basename(p)[:-5] for p in glob.glob(f"{era_dir}/*.yaml")
-        )
+        return sorted(os.path.basename(p)[:-5]
+                      for p in glob.glob(f"{era_dir}/*.yaml"))
 
     def _cache(self):
         inst = self.engine._instances.get("archive")
@@ -159,8 +184,7 @@ class AdminApp:
     # ------------------------------------------------------------- pages --
 
     async def _redirect(self, req: Request, flash: str) -> None:
-        sep = "&" if "?" in "/admin?" else "?"
-        location = f"/admin{sep}flash={urllib.parse.quote(flash)}"
+        location = f"/admin?flash={urllib.parse.quote(flash)}"
         head = (f"HTTP/1.1 303 See Other\r\nLocation: {location}\r\n"
                 f"Content-Length: 0\r\nConnection: close\r\n\r\n").encode()
         req.writer.write(head)
@@ -177,35 +201,65 @@ class AdminApp:
         req.writer.write(head + body)
         await req.writer.drain()
 
-    async def _serve_dashboard(self, req: Request) -> None:
-        flash = ""
-        if "flash=" in req.path:
-            flash = urllib.parse.parse_qs(
-                urllib.parse.urlparse(req.path).query).get("flash", [""])[0]
+    # ---------------------------------------------------------- dashboard --
 
-        prof = self.engine.profile
+    async def _serve_dashboard(self, req: Request, flash: str = "") -> None:
         parts = []
-
-        # --- era dial ---
         current = self.engine.era
+        prof = self.engine.profile
+
         parts.append("<h2>Time dial</h2>")
         parts.append('<div class="big">' + html.escape(current) + "</div>")
         if prof:
-            parts.append(f'<p class="muted">window {prof.raw.get("start_date")} '
-                         f"&rarr; {prof.raw.get('end_date')}</p>")
+            parts.append('<p class="muted">archive window '
+                         f"{prof.raw.get('start_date', '?')} &rarr; "
+                         f"{prof.raw.get('end_date', '?')}</p>")
+
+        # preset eras
         parts.append('<form method="POST" action="/admin/era">')
         for era in self.available_eras():
             checked = " checked" if era == current else ""
-            parts.append(f'<label style="display:block;margin:4px 0">'
-                         f'<input type="radio" name="era" value="{html.escape(era)}"'
-                         f"{checked}>{html.escape(era)}</label>")
-        parts.append('<button type="submit">Dial</button></form>')
+            parts.append(f"<label><input type=\"radio\" name=\"era\" "
+                         f"value=\"{html.escape(era)}\"{checked}>"
+                         f"{html.escape(era)} preset</label>")
+        parts.append('<button type="submit" class="minor">Dial preset</button></form>')
+
+        # free-date picker: three selects, IE-friendly
+        today = datetime.date.today()
+        floor = datetime.date.fromisoformat(FLOOR_DATE)
+        years = list(range(floor.year, today.year + 1))
+        try:
+            sel = datetime.date.fromisoformat(current)
+            sy, sm, sd = sel.year, sel.month, sel.day
+        except ValueError:
+            sy = sm = sd = None
+        parts.append('<form method="POST" action="/admin/date">')
+        parts.append("<select name=\"year\">")
+        for y in years:
+            s = " selected" if y == sy else ""
+            parts.append(f"<option{s}>{y}</option>")
+        parts.append("</select>")
+        parts.append("<select name=\"month\">")
+        for i, name in enumerate(MONTHS, 1):
+            s = " selected" if i == sm else ""
+            parts.append(f"<option value=\"{i}\"{s}>{name}</option>")
+        parts.append("</select>")
+        parts.append("<select name=\"day\">")
+        for d in range(1, 32):
+            s = " selected" if d == sd else ""
+            parts.append(f"<option{s}>{d}</option>")
+        parts.append("</select>")
+        parts.append('<button type="submit">Dial exact date</button></form>')
+        parts.append(f'<p class="muted">Any date from {FLOOR_DATE} to today. '
+                     "You will see the web as it existed that day - never "
+                     "from the future.</p>")
 
         # --- status ---
-        parts.append("<h2>Status</h2><table>")
         st = self._status()
         uptime = st["uptime_seconds"]
-        parts.append(f"<tr><td>Uptime</td><td>{uptime//3600}h {(uptime%3600)//60}m</td></tr>")
+        parts.append("<h2>Status</h2><table>")
+        parts.append(f"<tr><td>Uptime</td><td>{uptime//3600}h "
+                     f"{(uptime%3600)//60}m</td></tr>")
         parts.append(f"<tr><td>Default provider</td><td>"
                      f"{html.escape(st['default_provider'])}</td></tr>")
         if st.get("cache"):
@@ -216,32 +270,39 @@ class AdminApp:
         parts.append("</table>")
 
         # --- rules ---
-        parts.append("<h2>Routing rules</h2><table><tr><th>Match</th><th>Provider</th></tr>")
+        parts.append("<h2>Routing rules</h2><table><tr><th>Match</th>"
+                     "<th>Provider</th></tr>")
         for r in self.engine.rules:
             pat = html.escape(r.host) if r.host else "<i>(anything)</i>"
-            parts.append(f"<tr><td>{pat}</td><td>{html.escape(r.provider)}</td></tr>")
+            parts.append(f"<tr><td>{pat}</td>"
+                         f"<td>{html.escape(r.provider)}</td></tr>")
         parts.append(f"<tr><td><i>(default)</i></td><td>"
                      f"{html.escape(self.engine.default_provider)}</td></tr></table>")
 
-        # --- cache tools ---
+        # --- recently served domains ---
+        parts.append("<h2>Recently served sites</h2><table><tr><th>Site</th>"
+                     "<th>Provider</th><th>Hits</th><th>Last</th><th>Era</th></tr>")
+        entries = reversed(list(self.traffic.hosts.items()))  # newest first
+        shown = 0
+        for host, info in entries:
+            parts.append(
+                f"<tr><td>{html.escape(host)}</td>"
+                f"<td>{html.escape(info['provider'])}</td>"
+                f"<td>{info['count']}</td>"
+                f"<td class='muted'>{info['last']}</td>"
+                f"<td class='muted'>{html.escape(info['era'])}</td></tr>")
+            shown += 1
+            if shown >= 25:
+                break
+        if not shown:
+            parts.append("<tr><td colspan='5' class='muted'>"
+                         "Nothing served yet.</td></tr>")
+        parts.append("</table>")
+
+        # --- maintenance ---
         parts.append('<h2>Maintenance</h2>'
                      '<form method="POST" action="/admin/cache/purge">'
-                     '<button class="minor" type="submit">Purge cache</button></form>')
-
-        # --- request log ---
-        parts.append("<h2>Recent requests</h2><table><tr>"
-                     "<th>Time</th><th>Client</th><th>Provider</th>"
-                     "<th>Request</th><th>Era</th></tr>")
-        for entry in reversed(list(self.request_log)[-50:]):
-            parts.append(
-                "<tr>"
-                f"<td class='muted'>{entry['time']}</td>"
-                f"<td>{html.escape(entry['client'])}</td>"
-                f"<td>{html.escape(entry['provider'])}</td>"
-                f"<td>{html.escape(entry['method'])} http://"
-                f"{html.escape(entry['host'])}{html.escape(entry['path'])}</td>"
-                f"<td class='muted'>{html.escape(entry['era'])}</td>"
-                "</tr>")
-        parts.append("</table>")
+                     '<button class="minor" type="submit">Purge cache'
+                     "</button></form>")
 
         await self._serve_page(req, "".join(parts), flash=flash)

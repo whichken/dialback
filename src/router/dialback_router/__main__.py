@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import collections
 import logging
 import sys
 
@@ -12,6 +11,7 @@ import yaml
 from .admin import AdminApp
 from .rules import RuleEngine
 from .server import RouterServer
+from .traffic import TrafficLog
 
 
 def main() -> int:
@@ -36,9 +36,17 @@ def main() -> int:
 
     engine = RuleEngine.from_config(config)
 
-    # persisted era choice (set via the control UI) wins over config file
+    # persisted dial (set via the control UI) wins over config file
     saved = AdminApp.load_state()
-    if saved.get("era") and saved["era"] != engine.era and engine.era_dir:
+    if saved.get("date") and engine.era_dir:
+        try:
+            engine.set_date(saved["date"])
+            logging.info("restored persisted date %s from state file",
+                         saved["date"])
+        except ValueError:
+            logging.warning("persisted date %s invalid; keeping %s",
+                            saved["date"], engine.era)
+    elif saved.get("era") and saved["era"] != engine.era and engine.era_dir:
         try:
             engine.switch_era(saved["era"])
             logging.info("restored persisted era %s from state file", saved["era"])
@@ -46,9 +54,9 @@ def main() -> int:
             logging.warning("persisted era %s not found; keeping %s",
                             saved["era"], engine.era)
 
-    request_log = collections.deque(maxlen=200)
-    admin_app = AdminApp(engine, request_log, admin_cfg)
-    server = RouterServer(engine, request_log, admin_app)
+    traffic = TrafficLog()
+    admin_app = AdminApp(engine, traffic, admin_cfg)
+    server = RouterServer(engine, traffic, admin_app)
 
     try:
         asyncio.run(server.serve(bind, port, admin_port))
