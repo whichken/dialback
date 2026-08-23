@@ -12,7 +12,10 @@ era: "1997"
 default_provider: passthrough
 
 rules:
-  # Test hooks: any *.dialback.test host shows the placeholder page
+  # Test hooks: dialback.test and any subdomain show the placeholder page
   - match:
       host: "*.dialback.test"
+    provider: placeholder
+  - match:
+      host: "dialback.test"
     provider: placeholder
