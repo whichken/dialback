@@ -36,6 +36,10 @@ log "copying rootfs overlays..."
 sudo install -D -m 644 "$OVERLAYS/etc/sysctl.d/90-dialback.conf"     /etc/sysctl.d/90-dialback.conf
 sudo install      -m 644 "$OVERLAYS/etc/nftables.conf"              /etc/nftables.conf
 sudo install -D -m 644 "$OVERLAYS/etc/dnsmasq.d/dialback.conf"      /etc/dnsmasq.d/dialback.conf
+sudo install -D -m 644 \
+    "$OVERLAYS/etc/systemd/journald.conf.d/10-dialback.conf" \
+    /etc/systemd/journald.conf.d/10-dialback.conf
+sudo mkdir -p /var/cache/dialback
 
 log "enabling IP forwarding..."
 sudo sysctl --system >/dev/null

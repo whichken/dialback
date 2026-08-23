@@ -15,6 +15,9 @@ default_provider: archive
 providers:
   archive:
     cache_root: /var/cache/dialback
+    # eviction: whichever cap is hit first
+    cache_max_pct: 85        # % of backing filesystem (SD card)
+    # cache_max_mb: 20000    # optional absolute cap in MB
 
 rules:
   # Test hooks: *.dialback.test shows the placeholder page (proves routing)

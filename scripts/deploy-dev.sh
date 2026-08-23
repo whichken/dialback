@@ -30,9 +30,13 @@ sudo cp /opt/dialback/install/rootfs-overlays/etc/systemd/system/dialback-router
         /etc/systemd/system/dialback-router.service
 sudo cp /opt/dialback/install/rootfs-overlays/etc/nftables.conf /etc/nftables.conf
 sudo cp /opt/dialback/install/rootfs-overlays/etc/dnsmasq.d/dialback.conf /etc/dnsmasq.d/
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo cp /opt/dialback/install/rootfs-overlays/etc/systemd/journald.conf.d/10-dialback.conf \
+        /etc/systemd/journald.conf.d/
 sudo systemctl daemon-reload
 sudo nft -f /etc/nftables.conf
-sudo systemctl restart dnsmasq'
+sudo systemctl restart dnsmasq
+sudo systemctl try-restart systemd-journald 2>/dev/null || true'
 
 if [[ "$NO_RESTART" == "true" ]]; then
     echo "[deploy] skipping service restart"

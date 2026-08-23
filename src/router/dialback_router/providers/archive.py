@@ -45,9 +45,12 @@ class Archive(Provider):
     def __init__(self, options: dict | None = None):
         super().__init__(options)
         cache_root = self.options.get("cache_root", "/var/cache/dialback")
-        self.cdx_cache = DiskCache(cache_root)
-        # separate namespaces via prefixing; one DiskCache instance is enough
-        self.content_cache = DiskCache(cache_root)
+        max_mb = self.options.get("cache_max_mb")
+        self.cache = DiskCache(
+            cache_root,
+            max_pct=float(self.options.get("cache_max_pct", 85.0)),
+            max_bytes=int(max_mb) * 1024 * 1024 if max_mb else None,
+        )
 
     async def handle(self, req: Request) -> None:
         if not req.host or not req.profile:
@@ -62,7 +65,7 @@ class Archive(Provider):
         timestamp, capture_url = snapshot
 
         ident = f"{timestamp}|{capture_url}"
-        cached = self.content_cache.get("content", ident)
+        cached = self.cache.get("content", ident)
         if cached is None:
             fetch_url = (
                 f"https://web.archive.org/web/{timestamp}id_/{capture_url}"
@@ -85,7 +88,7 @@ class Archive(Provider):
             if "text/html" in (ctype or ""):
                 body = _downgrade_https(body)
             cached = (ctype or "").encode() + b"\n" + body
-            self.content_cache.put("content", ident, cached)
+            self.cache.put("content", ident, cached)
 
         ctype, _, body = cached.partition(b"\n")
         await self._serve(req, 200, ctype.decode(errors="replace"), body,
@@ -101,7 +104,7 @@ class Archive(Provider):
             f"&output=json&fl=timestamp,original,statuscode"
             f"&filter=statuscode:200&from={prof.start}&to={prof.end}&limit=-20"
         )
-        cached = self.cdx_cache.get("cdx", cdx_url)
+        cached = self.cache.get("cdx", cdx_url)
         if cached is None:
             log.info("cdx lookup %s [%s-%s]", original_url, prof.start, prof.end)
             try:
@@ -111,7 +114,7 @@ class Archive(Provider):
                 return None
             rows = json.loads(body or "[]") if status == 200 else []
             cached = json.dumps(rows).encode()
-            self.cdx_cache.put("cdx", cdx_url, cached)
+            self.cache.put("cdx", cdx_url, cached)
         else:
             rows = json.loads(cached)
 
