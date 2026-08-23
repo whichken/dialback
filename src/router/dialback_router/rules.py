@@ -13,7 +13,6 @@ class Rule:
     provider: str
     host: str | None = None       # wildcard pattern, e.g. "*.geocities.com"
 
-
 @dataclass
 class RuleEngine:
     era: str
@@ -34,6 +33,7 @@ class RuleEngine:
             rules=rules,
         )
         engine._provider_config = config.get("providers", {})
+        providers.set_provider_config(engine._provider_config)
         era_dir = config.get("era_dir")
         if era_dir:
             try:

@@ -6,6 +6,8 @@ After=network.target dnsmasq.service
 Type=simple
 WorkingDirectory=/opt/dialback/src/router
 ExecStart=/usr/bin/python3 -m dialback_router /etc/dialback/dialback.yaml
+# OPENROUTER_API_KEY lives here (not in the repo)
+EnvironmentFile=-/etc/dialback/env
 Restart=always
 RestartSec=3
 # Dev appliance: run as root so later stages can manage nftables/dnsmasq too.

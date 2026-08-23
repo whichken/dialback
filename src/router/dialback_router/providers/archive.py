@@ -15,7 +15,7 @@ import logging
 import urllib.parse
 import urllib.request
 
-from .base import Provider, register
+from .base import Provider, create, register
 from ..cache import DiskCache
 from ..request import Request
 
@@ -51,6 +51,11 @@ class Archive(Provider):
             max_pct=float(self.options.get("cache_max_pct", 85.0)),
             max_bytes=int(max_mb) * 1024 * 1024 if max_mb else None,
         )
+        # optional synthesis fallback when nothing is archived (stage 5)
+        self._fallback = None
+        fb_name = self.options.get("fallback_provider")
+        if fb_name and fb_name != self.name:
+            self._fallback = create(fb_name)
 
     async def handle(self, req: Request) -> None:
         if not req.host or not req.profile:
@@ -60,7 +65,10 @@ class Archive(Provider):
         original_url = f"http://{req.host}{req.path}"
         snapshot = await self._find_snapshot(req, original_url)
         if snapshot is None:
-            await self._serve_not_archived(req)
+            if self._fallback is not None:
+                await self._fallback.handle(req)
+            else:
+                await self._serve_not_archived(req)
             return
         timestamp, capture_url = snapshot
 
@@ -128,34 +136,6 @@ class Archive(Provider):
         return f"{ts:014d}", orig
 
     # -------------------------------------------------------------- output --
-
-    async def _serve(self, req: Request, status: int, ctype: str, body: bytes,
-                     head_only: bool = False) -> None:
-        reason = {200: "OK", 404: "Not Found", 400: "Bad Request",
-                  502: "Bad Gateway"}.get(status, "OK")
-        head = (
-            f"HTTP/1.1 {status} {reason}\r\n"
-            f"Content-Type: {ctype}\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-        ).encode()
-        req.writer.write(head + (b"" if head_only else body))
-        await req.writer.drain()
-
-    async def _serve_page(self, req: Request, title: str, message: str,
-                          status: int = 404) -> None:
-        h = html.escape
-        body = f"""<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html><head><meta charset="utf-8"><title>Dialback - {h(title)}</title></head>
-<body bgcolor="#c0c0c0"><center>
-<table width="600" cellpadding="10" border="2" bgcolor="#ffffff">
-<tr><td bgcolor="#000080"><font color="#ffffff" size="5"><b>Dialback</b></font></td></tr>
-<tr><td><h3>{h(title)}</h3>
-<p>{message}</p>
-<p><i>Era: {h(req.profile.label if req.profile else "?")}</i></p>
-</td></tr></table></center></body></html>""".encode()
-        await self._serve(req, status, "text/html", body)
 
     async def _serve_not_archived(self, req: Request) -> None:
         host = html.escape(req.host or "")

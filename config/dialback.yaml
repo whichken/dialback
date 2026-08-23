@@ -18,6 +18,14 @@ providers:
     # eviction: whichever cap is hit first
     cache_max_pct: 85        # % of backing filesystem (SD card)
     # cache_max_mb: 20000    # optional absolute cap in MB
+    # when a host has no archived snapshot, invent it instead:
+    fallback_provider: llm
+  llm:
+    model: gpt-5.6-luna
+    # api_base: https://openrouter.ai/api/v1   (default)
+    max_tokens: 4000
+    daily_request_cap: 300      # 0 = unlimited; counter resets daily/restart
+    cache_root: /var/cache/dialback
 
 rules:
   # Test hooks: *.dialback.test shows the placeholder page (proves routing)
