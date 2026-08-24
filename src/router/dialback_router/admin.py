@@ -23,7 +23,7 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 PAGE_SHELL = """<!DOCTYPE HTML>
-<html><head><meta charset="utf-8"><title>Dialback Control</title>{refresh}
+<html><head><meta charset="utf-8"><title>Dialback Control</title>
 <style>
  body {{ font-family: georgia, serif; background: #1a1a2e; color: #eaeaea; margin: 0; }}
  .wrap {{ max-width: 900px; margin: 0 auto; padding: 20px; }}
@@ -209,9 +209,7 @@ class AdminApp:
                           flash: str = "") -> None:
         if flash:
             body_html = f'<div class="flash">{html.escape(flash)}</div>' + body_html
-        refresh = '<meta http-equiv="refresh" content="4">' \
-            if getattr(self, "refresh", False) else ""
-        body = PAGE_SHELL.format(body=body_html, refresh=refresh).encode()
+        body = PAGE_SHELL.format(body=body_html, refresh="").encode()
         reason = "OK" if status == 200 else "Not Found"
         head = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/html\r\n"
                 f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode()
@@ -335,7 +333,6 @@ class AdminApp:
                          f"{html.escape(str(job.get('current', '')))}</td></tr>")
             parts.append("</table>")
             if job["status"] == "running":
-                self.refresh = True
                 parts.append('<form method="POST" action="/admin/crawl/cancel">'
                              '<button class="minor" type="submit">Cancel crawl'
                              "</button></form>")
