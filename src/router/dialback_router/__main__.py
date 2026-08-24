@@ -9,6 +9,7 @@ import sys
 import yaml
 
 from .admin import AdminApp
+from .crawler import Crawler
 from .rules import RuleEngine
 from .server import RouterServer
 from .traffic import TrafficLog
@@ -55,7 +56,7 @@ def main() -> int:
                             saved["era"], engine.era)
 
     traffic = TrafficLog()
-    admin_app = AdminApp(engine, traffic, admin_cfg)
+    admin_app = AdminApp(engine, traffic, admin_cfg, Crawler(engine))
     server = RouterServer(engine, traffic, admin_app)
 
     try:

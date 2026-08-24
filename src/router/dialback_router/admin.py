@@ -23,7 +23,7 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 PAGE_SHELL = """<!DOCTYPE HTML>
-<html><head><meta charset="utf-8"><title>Dialback Control</title>
+<html><head><meta charset="utf-8"><title>Dialback Control</title>{refresh}
 <style>
  body {{ font-family: georgia, serif; background: #1a1a2e; color: #eaeaea; margin: 0; }}
  .wrap {{ max-width: 900px; margin: 0 auto; padding: 20px; }}
@@ -60,9 +60,11 @@ def _fmt_bytes(n) -> str:
 
 
 class AdminApp:
-    def __init__(self, engine, traffic, admin_cfg: dict | None = None):
+    def __init__(self, engine, traffic, admin_cfg: dict | None = None,
+                 crawler=None):
         self.engine = engine
         self.traffic = traffic          # TrafficLog
+        self.crawler = crawler          # Crawler or None
         cfg = admin_cfg or {}
         self.hostname = cfg.get("hostname", "admin.dialback")
         self.started_at = datetime.datetime.now()
@@ -91,6 +93,19 @@ class AdminApp:
                     await self._redirect(
                         req, flash="Invalid date (must be between "
                                    f"{FLOOR_DATE} and today).")
+            elif path == "/admin/crawl":
+                host = (form.get("host") or [""])[0]
+                max_pages = (form.get("max_pages") or ["30"])[0]
+                if self.crawler is None:
+                    await self._redirect(req, flash="Crawler unavailable.")
+                    return
+                ok, msg = self.crawler.start(host, max_pages)
+                await self._redirect(req, flash=msg)
+            elif path == "/admin/crawl/cancel":
+                if self.crawler and self.crawler.cancel():
+                    await self._redirect(req, flash="Crawl cancelled.")
+                else:
+                    await self._redirect(req, flash="No crawl to cancel.")
             elif path == "/admin/cache/purge":
                 cache = self._cache()
                 if cache is not None:
@@ -194,7 +209,9 @@ class AdminApp:
                           flash: str = "") -> None:
         if flash:
             body_html = f'<div class="flash">{html.escape(flash)}</div>' + body_html
-        body = PAGE_SHELL.format(body=body_html).encode()
+        refresh = '<meta http-equiv="refresh" content="4">' \
+            if getattr(self, "refresh", False) else ""
+        body = PAGE_SHELL.format(body=body_html, refresh=refresh).encode()
         reason = "OK" if status == 200 else "Not Found"
         head = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/html\r\n"
                 f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode()
@@ -298,6 +315,35 @@ class AdminApp:
             parts.append("<tr><td colspan='5' class='muted'>"
                          "Nothing served yet.</td></tr>")
         parts.append("</table>")
+
+        # --- cache warmer / site crawler ---
+        parts.append('<h2>Cache warmer</h2>')
+        parts.append('<p class="muted">Walk a whole site in the current era '
+                     'and cache every page + image, so browsing it later is '
+                     'instant. Stays on the domain and its own subdomains.</p>')
+        job = self.crawler.status() if self.crawler else None
+        if job:
+            parts.append("<table><tr><th colspan=2>Crawl: "
+                         f"{html.escape(job['host'])} <span class='muted'>"
+                         f"({html.escape(job['status'])})</span></th></tr>")
+            for label, key in (("Pages fetched", "pages"), ("OK", "ok"),
+                               ("Not archived", "miss"), ("Errors", "errors"),
+                               ("Assets cached", "assets"), ("Queued", "queued")):
+                parts.append(f"<tr><td>{label}</td>"
+                             f"<td>{job.get(key, 0)}</td></tr>")
+            parts.append(f"<tr><td>Current</td><td class='muted'>"
+                         f"{html.escape(str(job.get('current', '')))}</td></tr>")
+            parts.append("</table>")
+            if job["status"] == "running":
+                self.refresh = True
+                parts.append('<form method="POST" action="/admin/crawl/cancel">'
+                             '<button class="minor" type="submit">Cancel crawl'
+                             "</button></form>")
+        parts.append('<form method="POST" action="/admin/crawl">'
+                     'Site: <input type="text" name="host" placeholder="geocities.com" '
+                     'size="28"> &nbsp; Max pages: '
+                     '<input type="text" name="max_pages" value="30" size="4"> '
+                     '<button type="submit">Start crawl</button></form>')
 
         # --- maintenance ---
         parts.append('<h2>Maintenance</h2>'
