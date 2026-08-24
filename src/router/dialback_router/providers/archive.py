@@ -79,7 +79,10 @@ def _http_get(url: str, timeout: int) -> tuple[int, str, bytes, dict]:
     for attempt in range(3):
         conn = _get_conn()
         try:
-            conn.timeout = max(timeout, conn.timeout)
+            # honor the caller's timeout even on pooled sockets
+            conn.timeout = timeout
+            if conn.sock is not None:
+                conn.sock.settimeout(timeout)
             conn.request("GET", path or "/",
                          headers={"User-Agent": "dialback/0.1",
                                   "Accept-Encoding": "identity"})
@@ -213,13 +216,15 @@ class Archive(Provider):
             task.add_done_callback(lambda t: t.exception() and
                                    log.debug("prefetch error: %s", t.exception()))
 
-    async def _prefetch_one(self, prof, asset_url: str, delay: float = 0.0):
+    async def _prefetch_one(self, prof, asset_url: str, delay: float = 0.0) -> bool:
+        """Resolve + cache one asset. Returns True if content was stored."""
         if delay:
             await asyncio.sleep(delay)
         snapshot = await self._find_snapshot_for(prof, asset_url)
         if snapshot is None:
-            return
-        await self._content(snapshot[0], snapshot[1])
+            return False
+        _ctype, body = await self._content(snapshot[0], snapshot[1])
+        return body is not None
 
     def transform(self, req: Request, ctype: str, body: bytes) -> bytes:
         """Hook for subclasses (hybrid) to post-process served content."""

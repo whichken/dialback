@@ -20,6 +20,11 @@ from . import providers
 log = logging.getLogger("dialback.crawler")
 
 _LINK_RE = re.compile(r'<a\b[^>]*href\s*=\s*["\']?([^"\' >]+)', re.I)
+_FRAME_RE = re.compile(
+    r'<(?:frame|iframe)\b[^>]*src\s*=\s*["\']?([^"\' >]+)', re.I)
+_META_REFRESH_RE = re.compile(
+    r'<meta\b[^>]*http-equiv\s*=\s*["\']?refresh["\']?[^>]*'
+    r'content\s*=\s*["\']?\d*\s*;\s*url=([^"\' >]+)', re.I)
 _ASSET_RE = re.compile(
     r'(?:\bsrc|background)\s*=\s*["\']([^"\' >]+)'
     r'|<link[^>]+href=["\']([^"\']+\.css[^"\']*)', re.I)
@@ -54,16 +59,41 @@ def _absolutize(raw: str, base_url: str) -> str | None:
     return absu
 
 
+def _link_key(absu: str) -> tuple[str, str]:
+    p = urllib.parse.urlparse(absu)
+    return (_norm(p.netloc), p.path or "/")
+
+
 def _extract(html_text: str, base_url: str):
-    """Returns (links, assets): [(host, path)], [absolute asset urls]."""
+    """Returns (links, assets): [(host, path)], [absolute asset urls].
+
+    Links include <a href>, frame/iframe sources (1997 sites loved
+    framesets - the home page often has NO anchors at all), and meta-
+    refresh targets.
+    """
     links, assets = [], []
     seen_l, seen_a = set(), set()
     for m in _LINK_RE.finditer(html_text):
         absu = _absolutize(m.group(1), base_url)
         if not absu:
             continue
-        p = urllib.parse.urlparse(absu)
-        key = (p.netloc.lower(), p.path or "/")
+        key = _link_key(absu)
+        if key not in seen_l:
+            seen_l.add(key)
+            links.append(key)
+    for m in _FRAME_RE.finditer(html_text):
+        absu = _absolutize(m.group(1), base_url)
+        if not absu:
+            continue
+        key = _link_key(absu)
+        if key not in seen_l:
+            seen_l.add(key)
+            links.append(key)
+    for m in _META_REFRESH_RE.finditer(html_text):
+        absu = _absolutize(m.group(1).strip(), base_url)
+        if not absu:
+            continue
+        key = _link_key(absu)
         if key not in seen_l:
             seen_l.add(key)
             links.append(key)
@@ -165,21 +195,28 @@ class Crawler:
                 job["ok"] += 1
 
                 if "text/html" in (ctype or "") and body:
+                    pending = []
                     try:
                         text = body.decode(errors="replace")
                         links, assets = _extract(text, capture_url)
                     except Exception:
                         links, assets = [], []
-                    for asset_url in assets:
+                    for i, asset_url in enumerate(assets):
                         if job["assets"] >= ASSETS_PER_PAGE * job["max_pages"]:
                             break
                         p = urllib.parse.urlparse(asset_url)
-                        if _in_scope(p.netloc, domain):
-                            try:
-                                await archive._prefetch_one(prof, asset_url)
-                                job["assets"] += 1
-                            except Exception:
-                                pass
+                        if not _in_scope(p.netloc, domain):
+                            continue
+                        pending.append(asset_url)
+                    # fetch this page's assets concurrently (the archive
+                    # provider's global semaphore bounds actual concurrency)
+                    if pending:
+                        results = await asyncio.gather(
+                            *(archive._prefetch_one(prof, u, delay=i * 0.3)
+                              for i, u in enumerate(pending)),
+                            return_exceptions=True)
+                        job["assets"] += sum(
+                            1 for r in results if r is True)
                     for lh, lp in links:
                         if not _in_scope(lh, domain):
                             continue
